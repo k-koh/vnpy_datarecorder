@@ -298,7 +298,7 @@ class RecorderEngine(BaseEngine):
         """"""
         self.ticks[tick.vt_symbol].append(tick)
 
-    def record_bar(self, bar: BarData) -> None:
+    def record_bar(self, bar: BarData, new_minute: bool = True) -> None:
         """"""
         self.bars[bar.vt_symbol].append(bar)
 
