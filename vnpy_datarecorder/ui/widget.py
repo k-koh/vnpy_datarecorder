@@ -18,10 +18,10 @@ from ..engine import (
 class RecorderManager(QtWidgets.QWidget):
     """"""
 
-    signal_log: QtCore.pyqtSignal = QtCore.pyqtSignal(Event)
-    signal_update: QtCore.pyqtSignal = QtCore.pyqtSignal(Event)
-    signal_contract: QtCore.pyqtSignal = QtCore.pyqtSignal(Event)
-    signal_exception: QtCore.pyqtSignal = QtCore.pyqtSignal(Event)
+    signal_log: QtCore.Signal = QtCore.Signal(Event)
+    signal_update: QtCore.Signal = QtCore.Signal(Event)
+    signal_contract: QtCore.Signal = QtCore.Signal(Event)
+    signal_exception: QtCore.Signal = QtCore.Signal(Event)
 
     def __init__(self, main_engine: MainEngine, event_engine: EventEngine) -> None:
         super().__init__()
@@ -54,8 +54,7 @@ class RecorderManager(QtWidgets.QWidget):
 
         self.symbol_completer: QtWidgets.QCompleter = QtWidgets.QCompleter(self.vt_symbols)
         self.symbol_completer.setFilterMode(QtCore.Qt.MatchContains)
-        self.symbol_completer.setCompletionMode(
-            self.symbol_completer.PopupCompletion)
+        self.symbol_completer.setCompletionMode(self.symbol_completer.CompletionMode.PopupCompletion)
         self.symbol_line.setCompleter(self.symbol_completer)
 
         add_bar_button: QtWidgets.QPushButton = QtWidgets.QPushButton("添加")
