@@ -297,6 +297,60 @@ class RecorderEngine(BaseEngine):
 
     def record_bar(self, bar: BarData, new_minute: bool = True) -> None:
         """"""
+        impv_value_p = 0
+        strike_value_p = 0
+        impv_value_c = 0
+        strike_value_c = 0
+
+        gateway = self.main_engine.get_gateway("KBS")
+        if gateway:
+            option_engine = self.main_engine.get_engine("OptionMaster")
+            # Put option
+            eris_put_match = gateway.rest_api.eris_put_match
+            if option_engine:
+                kabus_symbol = eris_put_match.get('symbol')
+                if kabus_symbol:
+                    option_data = option_engine.get_option_data_by_kabus_symbol(kabus_symbol)
+                    if option_data and option_data.mid_impv:
+                        impv_value_p = option_data.mid_impv
+                    else:
+                        impv_value_p = eris_put_match.get('impv', 0)
+                else:
+                    impv_value_p = eris_put_match.get('impv', 0)
+            else:
+                impv_value_p = eris_put_match.get('impv', 0)
+            strike_value_p = eris_put_match.get('strike', 0)
+
+            # Call option
+            eris_call_match = gateway.rest_api.eris_call_match
+            if option_engine:
+                kabus_symbol = eris_call_match.get('symbol')
+                if kabus_symbol:
+                    option_data = option_engine.get_option_data_by_kabus_symbol(kabus_symbol)
+                    if option_data and option_data.mid_impv:
+                        impv_value_c = option_data.mid_impv
+                    else:
+                        impv_value_c = eris_call_match.get('impv', 0)
+                else:
+                    impv_value_c = eris_call_match.get('impv', 0)
+            else:
+                impv_value_c = eris_call_match.get('impv', 0)
+            strike_value_c = eris_call_match.get('strike', 0)
+
+        if impv_value_p is None:
+            impv_value_p = 0
+        if strike_value_p is None:
+            strike_value_p = 0
+        if impv_value_c is None:
+            impv_value_c = 0
+        if strike_value_c is None:
+            strike_value_c = 0
+
+        bar.eris_p_iv = impv_value_p
+        bar.eris_p_strike = strike_value_p
+        bar.eris_c_iv = impv_value_c
+        bar.eris_c_strike = strike_value_c
+
         self.bars[bar.vt_symbol].append(bar)
 
     def get_bar_generator(self, vt_symbol: str) -> BarGenerator:
