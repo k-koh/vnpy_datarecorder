@@ -359,6 +359,7 @@ class RecorderEngine(BaseEngine):
 
         if not bg:
             bg = BarGenerator(self.record_bar)
+            bg.main_engine = self.main_engine
             self.bar_generators[vt_symbol] = bg
 
         return bg
