@@ -310,10 +310,10 @@ class RecorderEngine(BaseEngine):
 
     def record_bar(self, bar: BarData, new_minute: bool = True) -> None:
         """"""
-        impv_value_p = 0
-        strike_value_p = 0
-        impv_value_c = 0
-        strike_value_c = 0
+        impv_value_p = None
+        strike_value_p = None
+        impv_value_c = None
+        strike_value_c = None
 
         gateway = self.main_engine.get_gateway("KBS")
         if gateway:
@@ -326,13 +326,7 @@ class RecorderEngine(BaseEngine):
                     option_data = option_engine.get_option_data_by_kabus_symbol(kabus_symbol)
                     if option_data and option_data.mid_impv:
                         impv_value_p = option_data.mid_impv
-                    else:
-                        impv_value_p = eris_put_match.get('impv', 0)
-                else:
-                    impv_value_p = eris_put_match.get('impv', 0)
-            else:
-                impv_value_p = eris_put_match.get('impv', 0)
-            strike_value_p = eris_put_match.get('strike', 0)
+            strike_value_p = eris_put_match.get('strike', None)
 
             # Call option
             eris_call_match = gateway.rest_api.eris_call_match
@@ -342,22 +336,7 @@ class RecorderEngine(BaseEngine):
                     option_data = option_engine.get_option_data_by_kabus_symbol(kabus_symbol)
                     if option_data and option_data.mid_impv:
                         impv_value_c = option_data.mid_impv
-                    else:
-                        impv_value_c = eris_call_match.get('impv', 0)
-                else:
-                    impv_value_c = eris_call_match.get('impv', 0)
-            else:
-                impv_value_c = eris_call_match.get('impv', 0)
-            strike_value_c = eris_call_match.get('strike', 0)
-
-        if impv_value_p is None:
-            impv_value_p = 0
-        if strike_value_p is None:
-            strike_value_p = 0
-        if impv_value_c is None:
-            impv_value_c = 0
-        if strike_value_c is None:
-            strike_value_c = 0
+            strike_value_c = eris_call_match.get('strike', None)
 
         bar.eris_p_iv = impv_value_p
         bar.eris_p_strike = strike_value_p
