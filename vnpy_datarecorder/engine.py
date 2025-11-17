@@ -3,7 +3,7 @@ from threading import Thread
 from queue import Queue, Empty
 from copy import copy
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 
 from vnpy.event import Event, EventEngine
 from vnpy.trader.engine import BaseEngine, MainEngine
@@ -215,12 +215,25 @@ class RecorderEngine(BaseEngine):
 
     def process_timer_event(self, event: Event) -> None:
         """"""
+        now = datetime.now()
+        current_time = now.time()
+
+        # Define trading hours
+        # ザラバ	8:45～15:40	17:00～翌5:55
+        is_in_first_interval = time(8, 46) <= current_time <= time(15, 39)
+        is_in_second_interval = time(17, 1) <= current_time or current_time <= time(5, 54)
+
         self.filter_dt = datetime.now(DB_TZ)
 
         self.timer_count += 1
         if self.timer_count < self.timer_interval:
             return
         self.timer_count = 0
+
+        if not (is_in_first_interval or is_in_second_interval):
+            self.bars.clear()
+            self.ticks.clear()
+            return
 
         for bars in self.bars.values():
             self.queue.put(("bar", bars))
