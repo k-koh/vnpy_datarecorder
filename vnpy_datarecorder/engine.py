@@ -314,10 +314,23 @@ class RecorderEngine(BaseEngine):
         strike_value_p = None
         impv_value_c = None
         strike_value_c = None
+        atm_iv = None
+        n225_vi = None
+
+        option_engine = self.main_engine.get_engine("OptionMaster")
+        if option_engine:
+            instrument = option_engine.get_instrument(bar.vt_symbol)
+            if instrument:
+                if hasattr(instrument, "chains"):
+                    for chain in instrument.chains.values():
+                        if chain.atm_impv:
+                            atm_iv = chain.atm_impv
+                            break
+                elif hasattr(instrument, "chain"):
+                    atm_iv = instrument.chain.atm_impv
 
         gateway = self.main_engine.get_gateway("KBS")
         if gateway:
-            option_engine = self.main_engine.get_engine("OptionMaster")
             # Put option
             eris_put_match = gateway.rest_api.eris_put_match
             if option_engine:
@@ -342,6 +355,8 @@ class RecorderEngine(BaseEngine):
         bar.eris_p_strike = strike_value_p
         bar.eris_c_iv = impv_value_c
         bar.eris_c_strike = strike_value_c
+        bar.atm_iv = atm_iv
+        bar.n225_vi = n225_vi
 
         self.bars[bar.vt_symbol].append(bar)
 
