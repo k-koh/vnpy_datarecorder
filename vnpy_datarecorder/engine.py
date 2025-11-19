@@ -310,10 +310,10 @@ class RecorderEngine(BaseEngine):
 
     def record_bar(self, bar: BarData, new_minute: bool = True) -> None:
         """"""
-        impv_value_p = None
-        strike_value_p = None
-        impv_value_c = None
-        strike_value_c = None
+        eris_p_iv = None
+        eris_p_strike = None
+        eris_c_iv = None
+        eris_c_strike = None
         atm_iv = None
         n225_vi = None
 
@@ -321,40 +321,26 @@ class RecorderEngine(BaseEngine):
         if option_engine:
             instrument = option_engine.get_instrument(bar.vt_symbol)
             if instrument:
-                if hasattr(instrument, "chains"):
+                chain_data = None
+                if hasattr(instrument, "chains"):  # It's an UnderlyingData
                     for chain in instrument.chains.values():
-                        if chain.atm_impv:
-                            atm_iv = chain.atm_impv
+                        if chain.eris_p_iv is not None:  # Check if eris data is available
+                            chain_data = chain
                             break
-                elif hasattr(instrument, "chain"):
-                    atm_iv = instrument.chain.atm_impv
+                elif hasattr(instrument, "chain"):  # It's an OptionData
+                    chain_data = instrument.chain
 
-        gateway = self.main_engine.get_gateway("KBS")
-        if gateway:
-            # Put option
-            eris_put_match = gateway.rest_api.eris_put_match
-            if option_engine:
-                kabus_symbol = eris_put_match.get('symbol')
-                if kabus_symbol:
-                    option_data = option_engine.get_option_data_by_kabus_symbol(kabus_symbol)
-                    if option_data and option_data.mid_impv:
-                        impv_value_p = option_data.mid_impv
-            strike_value_p = eris_put_match.get('strike', None)
+                if chain_data:
+                    atm_iv = chain_data.atm_impv
+                    eris_p_iv = chain_data.eris_p_iv
+                    eris_p_strike = chain_data.eris_p_strike
+                    eris_c_iv = chain_data.eris_c_iv
+                    eris_c_strike = chain_data.eris_c_strike
 
-            # Call option
-            eris_call_match = gateway.rest_api.eris_call_match
-            if option_engine:
-                kabus_symbol = eris_call_match.get('symbol')
-                if kabus_symbol:
-                    option_data = option_engine.get_option_data_by_kabus_symbol(kabus_symbol)
-                    if option_data and option_data.mid_impv:
-                        impv_value_c = option_data.mid_impv
-            strike_value_c = eris_call_match.get('strike', None)
-
-        bar.eris_p_iv = impv_value_p
-        bar.eris_p_strike = strike_value_p
-        bar.eris_c_iv = impv_value_c
-        bar.eris_c_strike = strike_value_c
+        bar.eris_p_iv = eris_p_iv
+        bar.eris_p_strike = eris_p_strike
+        bar.eris_c_iv = eris_c_iv
+        bar.eris_c_strike = eris_c_strike
         bar.atm_iv = atm_iv
         bar.n225_vi = n225_vi
 
