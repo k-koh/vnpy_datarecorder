@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, time
 
 from vnpy.event import Event, EventEngine
 from vnpy.trader.engine import BaseEngine, MainEngine
-from vnpy.trader.constant import Exchange
+from vnpy.trader.constant import Exchange, Interval, Product
 from vnpy.trader.object import (
     SubscribeRequest,
     TickData,
@@ -47,6 +47,8 @@ class RecorderEngine(BaseEngine):
 
         self.timer_count: int = 0
         self.timer_interval: int = 10
+        self.option_timer_count: int = 0
+        self.option_timer_interval: int = 60 # Run every minute
 
         self.ticks: dict[str, list[TickData]] = defaultdict(list)
         self.bars: dict[str, list[BarData]] = defaultdict(list)
@@ -225,15 +227,21 @@ class RecorderEngine(BaseEngine):
 
         self.filter_dt = datetime.now(DB_TZ)
 
-        self.timer_count += 1
-        if self.timer_count < self.timer_interval:
-            return
-        self.timer_count = 0
-
         if not (is_in_first_interval or is_in_second_interval):
             self.bars.clear()
             self.ticks.clear()
             return
+
+        self.timer_count += 1
+        self.option_timer_count += 1
+        if self.timer_count < self.timer_interval:
+            return
+        self.timer_count = 0
+
+        # Call record_all_option_data every minute
+        if self.option_timer_count >= self.option_timer_interval:
+            self.record_all_option_data()
+            self.option_timer_count = 0
 
         for bars in self.bars.values():
             self.queue.put(("bar", bars))
@@ -310,40 +318,6 @@ class RecorderEngine(BaseEngine):
 
     def record_bar(self, bar: BarData, new_minute: bool = True) -> None:
         """"""
-        eris_p_iv = None
-        eris_p_strike = None
-        eris_c_iv = None
-        eris_c_strike = None
-        atm_iv = None
-        n225_vi = None
-
-        option_engine = self.main_engine.get_engine("OptionMaster")
-        if option_engine:
-            instrument = option_engine.get_instrument(bar.vt_symbol)
-            if instrument:
-                chain_data = None
-                if hasattr(instrument, "chains"):  # It's an UnderlyingData
-                    for chain in instrument.chains.values():
-                        if chain.eris_p_iv is not None:  # Check if eris data is available
-                            chain_data = chain
-                            break
-                elif hasattr(instrument, "chain"):  # It's an OptionData
-                    chain_data = instrument.chain
-
-                if chain_data:
-                    atm_iv = chain_data.atm_impv
-                    eris_p_iv = chain_data.eris_p_iv
-                    eris_p_strike = chain_data.eris_p_strike
-                    eris_c_iv = chain_data.eris_c_iv
-                    eris_c_strike = chain_data.eris_c_strike
-
-        bar.eris_p_iv = eris_p_iv
-        bar.eris_p_strike = eris_p_strike
-        bar.eris_c_iv = eris_c_iv
-        bar.eris_c_strike = eris_c_strike
-        bar.atm_iv = atm_iv
-        bar.n225_vi = n225_vi
-
         self.bars[bar.vt_symbol].append(bar)
 
     def get_bar_generator(self, vt_symbol: str) -> BarGenerator:
@@ -364,3 +338,59 @@ class RecorderEngine(BaseEngine):
             exchange=contract.exchange
         )
         self.main_engine.subscribe(req, contract.gateway_name)
+
+    def record_all_option_data(self) -> None:
+        """
+        Record data for all strike options from OptionMaster.
+        """
+        option_engine = self.main_engine.get_engine("OptionMaster")
+        if not option_engine:
+            self.write_log("OptionMaster engine not loaded, cannot record option data.")
+            return
+
+        all_contracts = self.main_engine.get_all_contracts()
+        option_contracts = [c for c in all_contracts if c.product == Product.OPTION]
+
+        if not option_contracts:
+            self.write_log("No option contracts found.")
+            return
+
+        self.write_log(f"Starting to record data for {len(option_contracts)} option contracts.")
+
+        # dt = datetime.now(DB_TZ)
+        now: datetime = datetime.now(DB_TZ)
+        session_start: datetime = now.replace(hour=17, minute=0, second=0, microsecond=0)
+        if now.hour < 17:
+            session_start = session_start - timedelta(days=1)
+
+        for contract in option_contracts:
+            instrument = option_engine.get_instrument(contract.vt_symbol)
+            if not instrument:
+                continue
+
+            # Create a bar and add option data to it
+            bar = BarData(
+                gateway_name=contract.gateway_name,
+                symbol=contract.symbol,
+                exchange=contract.exchange,
+                datetime=session_start,
+                interval=Interval.DAILY,
+                volume=getattr(instrument, "volume", 0),
+                open_interest=getattr(instrument, "open_interest", 0),
+                open_price=getattr(instrument, "last_price", 0),
+                high_price=getattr(instrument, "last_price", 0),
+                low_price=getattr(instrument, "last_price", 0),
+                close_price=getattr(instrument, "last_price", 0),
+            )
+
+            # Add greeks and IV - assuming attribute names
+            bar.strike = getattr(instrument, "strike_price", 0)
+            bar.iv = getattr(instrument, "mid_impv", 0)
+            bar.delta = getattr(instrument, "theo_delta", 0)
+            bar.gamma = getattr(instrument, "theo_gamma", 0)
+            bar.vega = getattr(instrument, "theo_vega", 0)
+            bar.theta = getattr(instrument, "theo_theta", 0)
+
+            self.record_bar(bar)
+
+        self.write_log(f"Finished recording daily option data for {len(option_contracts)} contracts.")
