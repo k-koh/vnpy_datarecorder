@@ -381,6 +381,7 @@ class RecorderEngine(BaseEngine):
                 high_price=getattr(instrument, "last_price", 0),
                 low_price=getattr(instrument, "last_price", 0),
                 close_price=getattr(instrument, "last_price", 0),
+                futures_option_type=2 # Assuming 2 represents options
             )
 
             # Add greeks and IV - assuming attribute names
