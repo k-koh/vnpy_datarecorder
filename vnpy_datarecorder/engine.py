@@ -360,9 +360,9 @@ class RecorderEngine(BaseEngine):
 
         # dt = datetime.now(DB_TZ)
         now: datetime = datetime.now(DB_TZ)
-        session_start: datetime = now.replace(hour=17, minute=0, second=0, microsecond=0)
-        if now.hour < 17:
-            session_start = session_start - timedelta(days=1)
+        session_end: datetime = now.replace(hour=15, minute=45, second=0, microsecond=0)
+        if now.hour >= 17:
+            session_end = session_end + timedelta(days=1)
 
         for contract in option_contracts:
             instrument = option_engine.get_instrument(contract.vt_symbol)
@@ -374,7 +374,7 @@ class RecorderEngine(BaseEngine):
                 gateway_name=contract.gateway_name,
                 symbol=contract.symbol,
                 exchange=contract.exchange,
-                datetime=session_start,
+                datetime=session_end,
                 interval=Interval.DAILY,
                 volume=getattr(instrument, "volume", 0),
                 open_interest=getattr(instrument, "open_interest", 0),
