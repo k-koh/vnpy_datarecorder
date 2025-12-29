@@ -385,6 +385,9 @@ class RecorderEngine(BaseEngine):
                 futures_option_type=2 # Assuming 2 represents options
             )
 
+            if instrument.tick:
+                bar.n225_vi = instrument.tick.n225_vi
+
             # Add greeks and IV - assuming attribute names
             bar.strike = getattr(instrument, "strike_price", 0)
             bar.iv = getattr(instrument, "mid_impv", 0)
