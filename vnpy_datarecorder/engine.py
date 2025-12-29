@@ -223,7 +223,7 @@ class RecorderEngine(BaseEngine):
         # Define trading hours
         # ザラバ	8:45～15:40	17:00～翌5:55
         is_in_first_interval = time(8, 46) <= current_time <= time(15, 36)
-        is_in_second_interval = time(17, 1) <= current_time or current_time <= time(2, 56)
+        is_in_second_interval = time(17, 1) <= current_time or current_time <= time(1, 56)
         market_closed: bool = False
 
         self.filter_dt = datetime.now(DB_TZ)
