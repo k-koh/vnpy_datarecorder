@@ -57,6 +57,12 @@ class RecorderEngine(BaseEngine):
         self.filter_window: int = 60                        # Tick数据过滤的时间窗口，默认60秒
         self.filter_delta: timedelta                        # Tick数据过滤的时间偏差对象
 
+        # 行情存活判定：休市日（假日）网关只在启动时推送一次陈旧的快照Tick，
+        # 之后不再有Tick。记录最近一次有效Tick的本地时间，若超过存活窗口未
+        # 收到有效Tick，则不保存K线与期权数据。
+        self.last_tick_dt: datetime | None = None
+        self.feed_alive_window: int = 120                   # 行情存活时间窗口，默认120秒
+
         self.database: BaseDatabase = get_database()
 
         self.load_setting()
@@ -72,6 +78,8 @@ class RecorderEngine(BaseEngine):
 
         self.filter_window = setting.get("filter_window", 60)
         self.filter_delta = timedelta(seconds=self.filter_window)
+
+        self.feed_alive_window = setting.get("feed_alive_window", 120)
 
     def save_setting(self) -> None:
         """"""
@@ -208,6 +216,9 @@ class RecorderEngine(BaseEngine):
         if abs(tick_delta) >= self.filter_delta:
             return
 
+        # 收到有效（新鲜）Tick，标记行情存活
+        self.last_tick_dt = datetime.now(DB_TZ)
+
         if tick.vt_symbol in self.tick_recordings:
             self.record_tick(copy(tick))
 
@@ -215,20 +226,40 @@ class RecorderEngine(BaseEngine):
             bg: BarGenerator = self.get_bar_generator(tick.vt_symbol)
             bg.update_tick(copy(tick))
 
+    def _market_closed(self) -> bool:
+        """休場モード判定：KBSゲートウェイの market_closed_mode。"""
+        gateway = self.main_engine.get_gateway("KBS")
+        return bool(getattr(gateway, "market_closed_mode", False))
+
     def process_timer_event(self, event: Event) -> None:
         """"""
         now = datetime.now()
         current_time = now.time()
 
-        # Define trading hours
-        # ザラバ	8:45～15:40	17:00～翌5:55
-        is_in_first_interval = time(8, 46) <= current_time <= time(15, 35)
-        is_in_second_interval = time(17, 1) <= current_time or current_time <= time(1, 55)
-        market_closed: bool = False
+        # Recording windows (ザラバ 8:45～15:40 / 17:00～翌5:55)
+        #   Option daily : 8:46～15:35 and 17:01～翌1:55
+        #   Option 15m   : 8:46～15:35 and 17:01～翌5:54 (wider — intraday only)
+        #   Bar / Tick   : 8:46～15:39 and 17:01～翌5:59 (wider superset)
+        in_option_window: bool = (
+            time(8, 46) <= current_time <= time(15, 35)
+            or current_time >= time(17, 1)
+            or current_time <= time(1, 55)
+        )
+        in_option15m_window: bool = (
+            time(8, 46) <= current_time <= time(15, 35)
+            or current_time >= time(17, 1)
+            or current_time <= time(5, 54)
+        )
+        in_bartick_window: bool = (
+            time(8, 46) <= current_time <= time(15, 39)
+            or current_time >= time(17, 1)
+            or current_time <= time(5, 54)
+        )
 
         self.filter_dt = datetime.now(DB_TZ)
 
-        if not (is_in_first_interval or is_in_second_interval) or market_closed:
+        # Outside the (wider) bar/tick window → nothing is recorded.
+        if not in_bartick_window:
             self.bars.clear()
             self.ticks.clear()
             return
@@ -239,9 +270,37 @@ class RecorderEngine(BaseEngine):
             return
         self.timer_count = 0
 
-        # Call record_all_option_data every minute
-        if self.option_timer_count >= self.option_timer_interval:
-            self.record_all_option_data()
+        # 行情存活判定：休市日（假日）网关只在启动时推送一次陈旧的快照Tick，
+        # 之后没有Tick。若在 feed_alive_window 秒内没有收到有效Tick，则视为
+        # 行情未存活，不保存K线与期权数据（并清空缓存）。
+        feed_alive: bool = (
+            self.last_tick_dt is not None
+            and (datetime.now(DB_TZ) - self.last_tick_dt).total_seconds()
+            <= self.feed_alive_window
+        )
+        if not feed_alive:
+            print(f"[__] 行情未存活，不保存K线与期权数据（并清空缓存）")
+            self.bars.clear()
+            self.ticks.clear()
+            return
+
+        # 休場モード（KBSゲートウェイ market_closed_mode）では、オプション
+        # データと Tick データを保存しない。
+        market_closed: bool = self._market_closed()
+        if market_closed:
+            print(f"[__] 休場モードでは、オプションデータと Tick データを保存しない。")
+            self.bars.clear()
+            self.ticks.clear()
+            return
+
+        # Record option data every minute.
+        #   15m intraday bar  : written while in_option15m_window (…～翌5:54)
+        #   DAILY snapshot    : written only while in_option_window (…～翌1:55)
+        if (
+            in_option15m_window
+            and self.option_timer_count >= self.option_timer_interval
+        ):
+            self.record_all_option_data(write_daily=in_option_window)
             self.option_timer_count = 0
 
         for bars in self.bars.values():
@@ -340,9 +399,46 @@ class RecorderEngine(BaseEngine):
         )
         self.main_engine.subscribe(req, contract.gateway_name)
 
-    def record_all_option_data(self) -> None:
+    def _build_option_bar(
+        self, contract: ContractData, instrument, dt: datetime, interval: Interval
+    ) -> BarData:
+        """Build one option snapshot bar (IV/greeks/strike) for the given interval."""
+        last_price = getattr(instrument, "last_price", 0)
+        bar = BarData(
+            gateway_name=contract.gateway_name,
+            symbol=contract.symbol,
+            exchange=contract.exchange,
+            datetime=dt,
+            interval=interval,
+            volume=getattr(instrument, "volume", 0),
+            open_interest=getattr(instrument, "open_interest", 0),
+            open_price=last_price,
+            high_price=last_price,
+            low_price=last_price,
+            close_price=last_price,
+            futures_option_type=2,  # Assuming 2 represents options
+        )
+        if instrument.tick:
+            bar.n225_vi = instrument.tick.n225_vi
+        bar.strike = getattr(instrument, "strike_price", 0)
+        bar.iv = getattr(instrument, "mid_impv", 0)
+        bar.delta = getattr(instrument, "theo_delta", 0)
+        bar.gamma = getattr(instrument, "theo_gamma", 0)
+        bar.vega = getattr(instrument, "theo_vega", 0)
+        bar.theta = getattr(instrument, "theo_theta", 0)
+        return bar
+
+    def record_all_option_data(self, write_daily: bool = True) -> None:
         """
         Record data for all strike options from OptionMaster.
+
+        Writes per contract:
+          * DAILY   (datetime = session_end 15:45) — end-of-session snapshot.
+                    Only when write_daily=True (option window …～翌1:55).
+          * 15m     (datetime = current 15-min bucket) — intraday per-strike
+                    IV, upserted each minute so the bucket holds the latest
+                    snapshot. Written for the wider 15m window (…～翌5:54).
+                    Used by the IV時系列 pinned (固定行使価格) line.
         """
         option_engine = self.main_engine.get_engine("OptionMaster")
         if not option_engine:
@@ -358,44 +454,27 @@ class RecorderEngine(BaseEngine):
 
         self.write_log(f"Starting to record data for {len(option_contracts)} option contracts.")
 
-        # dt = datetime.now(DB_TZ)
         now: datetime = datetime.now(DB_TZ)
         session_end: datetime = now.replace(hour=15, minute=45, second=0, microsecond=0)
         if now.hour >= 17:
             session_end = session_end + timedelta(days=1)
+        # Current 15-minute bucket for intraday per-strike recording.
+        bucket_15m: datetime = now.replace(
+            minute=(now.minute // 15) * 15, second=0, microsecond=0
+        )
 
         for contract in option_contracts:
             instrument = option_engine.get_instrument(contract.vt_symbol)
             if not instrument:
                 continue
 
-            # Create a bar and add option data to it
-            bar = BarData(
-                gateway_name=contract.gateway_name,
-                symbol=contract.symbol,
-                exchange=contract.exchange,
-                datetime=session_end,
-                interval=Interval.DAILY,
-                volume=getattr(instrument, "volume", 0),
-                open_interest=getattr(instrument, "open_interest", 0),
-                open_price=getattr(instrument, "last_price", 0),
-                high_price=getattr(instrument, "last_price", 0),
-                low_price=getattr(instrument, "last_price", 0),
-                close_price=getattr(instrument, "last_price", 0),
-                futures_option_type=2 # Assuming 2 represents options
+            if write_daily:
+                self.record_bar(
+                    self._build_option_bar(contract, instrument, session_end, Interval.DAILY)
+                )
+            self.record_bar(
+                self._build_option_bar(contract, instrument, bucket_15m, Interval.MINUTE15)
             )
 
-            if instrument.tick:
-                bar.n225_vi = instrument.tick.n225_vi
-
-            # Add greeks and IV - assuming attribute names
-            bar.strike = getattr(instrument, "strike_price", 0)
-            bar.iv = getattr(instrument, "mid_impv", 0)
-            bar.delta = getattr(instrument, "theo_delta", 0)
-            bar.gamma = getattr(instrument, "theo_gamma", 0)
-            bar.vega = getattr(instrument, "theo_vega", 0)
-            bar.theta = getattr(instrument, "theo_theta", 0)
-
-            self.record_bar(bar)
-
-        self.write_log(f"Finished recording daily option data for {len(option_contracts)} contracts.")
+        kinds: str = "daily + 15m" if write_daily else "15m"
+        self.write_log(f"Finished recording option data ({kinds}) for {len(option_contracts)} contracts.")
