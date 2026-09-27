@@ -457,7 +457,12 @@ class RecorderEngine(BaseEngine):
         now: datetime = datetime.now(DB_TZ)
         session_end: datetime = now.replace(hour=15, minute=45, second=0, microsecond=0)
         if now.hour >= 17:
+            # 夜間セッションは翌営業日のもの。金曜の夜にそのまま1日足すと土曜
+            # ラベルの日足ができてしまい、月曜朝の「前日」に拾われるので、
+            # 平日まで進めてから書く。
             session_end = session_end + timedelta(days=1)
+            while session_end.weekday() >= 5:
+                session_end = session_end + timedelta(days=1)
         # Current 15-minute bucket for intraday per-strike recording.
         bucket_15m: datetime = now.replace(
             minute=(now.minute // 15) * 15, second=0, microsecond=0
