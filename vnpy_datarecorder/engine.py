@@ -410,8 +410,13 @@ class RecorderEngine(BaseEngine):
             exchange=contract.exchange,
             datetime=dt,
             interval=interval,
-            volume=getattr(instrument, "volume", 0),
-            open_interest=getattr(instrument, "open_interest", 0),
+            # 出来高・建玉残高は OptionData ではなくティックが持っている。
+            # instrument から取ると常に 0 になり、建玉の前日比・前週比が
+            # 出せない。
+            volume=getattr(instrument.tick, "volume", 0) if instrument.tick else 0,
+            open_interest=(
+                getattr(instrument.tick, "open_interest", 0) if instrument.tick else 0
+            ),
             open_price=last_price,
             high_price=last_price,
             low_price=last_price,
